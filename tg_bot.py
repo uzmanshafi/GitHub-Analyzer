@@ -1,3 +1,5 @@
+# tg_bot.py
+
 import logging
 import re
 from urllib.parse import urlparse
@@ -20,7 +22,6 @@ logging.basicConfig(
 
 SOLANA_WALLET_ADDRESS = "7RGjKAS8Lij9oAihuWcuprYQ7Qu1p674Qf7z8HfLvnXa"
 
-
 def extract_github_username(text: str) -> str:
     """
     Parses a possible GitHub link and extracts the first path segment after github.com/,
@@ -38,7 +39,6 @@ def extract_github_username(text: str) -> str:
             return match.group(1)
 
     return text.strip()
-
 
 class BotController:
     def __init__(self, token, github_token=None):
@@ -61,7 +61,7 @@ class BotController:
         welcome_text = (
             "<b>Welcome to the GitHub Analyzer Bot!</b>\n\n"
             "Send me a GitHub username or profile link, and I will check how legit the account is.\n\n"
-            "In a group chat, use /analyze @githubUser to analyze a GitHub profile.\n\n"
+            "In a group chat, use /analyze <GitHub username or link>.\n\n"
             "This bot was created by @defamed_sol. If you like to show support, "
             f"please donate SOL to <code>{SOLANA_WALLET_ADDRESS}</code>.\n\n"
             "Use /help to see more commands."
@@ -76,7 +76,8 @@ class BotController:
         help_text = (
             "<b>How to use this bot</b>:\n\n"
             "• In a group chat:\n"
-            "  <code>/analyze @githubUser</code>\n"
+            "  <code>/analyze octocat</code>\n"
+            "  <code>/analyze https://github.com/octocat</code>\n\n"
             "• In a private chat:\n"
             "  Send me a GitHub username or link directly.\n\n"
             "I'll analyze the profile and provide details such as readme depth, commit patterns, "
@@ -84,48 +85,58 @@ class BotController:
         )
         await update.effective_message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
-async def analyze_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    message = update.effective_message
+    async def analyze_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Handler for the group command: /analyze <GitHub username or link>
+        """
+        chat = update.effective_chat
+        message = update.effective_message
 
-    if not chat or not message:
-        return
+        # If there's no chat or message, we can't proceed
+        if not chat or not message:
+            logging.info("No chat/message in update, ignoring /analyze command.")
+            return
 
-    if chat.type == Chat.PRIVATE:
-        await message.reply_text("Please use this command in a group chat.")
-        return
+        if chat.type == Chat.PRIVATE:
+            logging.info("User tried /analyze in a private chat.")
+            await message.reply_text("Please use this command in a group chat.")
+            return
 
-    text = message.text.strip()
-    # Instead of expecting @username, let's just capture everything after '/analyze '
-    pattern = r"^/analyze\s+(.+)$"
-    match = re.match(pattern, text)
+        text = message.text.strip() if message.text else ""
+        logging.info(f"Group analyze command received: {text}")
 
-    if not match:
-        await message.reply_text(
-            "Usage:\n"
-            "/analyze <GitHub username or link>\n\n"
-            "e.g. /analyze octocat\n"
-            "     /analyze https://github.com/octocat"
+        # Capture anything after '/analyze '
+        pattern = r"^/analyze\s+(.+)$"
+        match = re.match(pattern, text)
+        if not match:
+            usage_msg = (
+                "Usage:\n"
+                "/analyze <GitHub username or link>\n\n"
+                "Examples:\n"
+                "/analyze octocat\n"
+                "/analyze https://github.com/octocat"
+            )
+            await message.reply_text(usage_msg)
+            return
+
+        user_input = match.group(1).strip()
+        logging.info(f"Extracted user input from group command: {user_input}")
+
+        github_user = extract_github_username(user_input)
+        analyzing_msg = await message.reply_text(
+            f"Analyzing GitHub user <b>{github_user}</b>... please wait!",
+            parse_mode=ParseMode.HTML
         )
-        return
 
-    user_input = match.group(1).strip()
-    # Now user_input might be "https://github.com/elizaOS" or "elizaOS"
-    github_user = extract_github_username(user_input)
+        logging.info(f"Starting analysis for {github_user}...")
+        result = compute_profile_analysis(github_user, token=self.github_token)
+        logging.info(f"Analysis complete for {github_user}.")
 
-    analyzing_msg = await message.reply_text(
-        f"Analyzing GitHub user <b>{github_user}</b>... please wait!",
-        parse_mode=ParseMode.HTML
-    )
+        if "error" in result:
+            await analyzing_msg.edit_text("User not found or an error occurred.")
+            return
 
-    result = compute_profile_analysis(github_user, token=self.github_token)
-
-    if "error" in result:
-        await analyzing_msg.edit_text("User not found or an error occurred.")
-        return
-
-    await self._send_analysis_result(update, context, result, editing_msg=analyzing_msg)
-
+        await self._send_analysis_result(update, context, result, editing_msg=analyzing_msg)
 
     async def analyze_private_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
@@ -168,8 +179,8 @@ async def analyze_group_command(self, update: Update, context: ContextTypes.DEFA
     ):
         """
         Helper method to format and send the analysis result.
-        If editing_msg is provided, we'll edit that message with the final text.
-        Otherwise, we'll send a new message.
+        If editing_msg is provided, we edit that message with the final text.
+        Otherwise, we send a new message.
         """
         user_data = result["user_data"]
         score = result["score"]
