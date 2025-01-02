@@ -1,125 +1,255 @@
+import logging
+import re
+from urllib.parse import urlparse
+from telegram import Update, Chat
+from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    filters
+    filters,
+    ContextTypes,
 )
-from telegram import Update
-from telegram.constants import ParseMode
-from telegram.ext import ContextTypes
+from analyzer import compute_profile_analysis
 
-import re
-from analyzer import (
-    fetch_github_user,
-    fetch_user_repos,
-    compute_github_score
+logging.basicConfig(
+    filename="logs/bot.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
 SOLANA_WALLET_ADDRESS = "7RGjKAS8Lij9oAihuWcuprYQ7Qu1p674Qf7z8HfLvnXa"
+
+
+def extract_github_username(text: str) -> str:
+    """
+    Parses a possible GitHub link and extracts the first path segment after github.com/,
+    or returns the raw text if no match.
+    """
+    parsed = urlparse(text)
+    if parsed.netloc and "github.com" in parsed.netloc:
+        path_parts = parsed.path.strip("/").split("/")
+        if path_parts:
+            return path_parts[0]
+    else:
+        pattern = r"github\.com/([^/]+)"
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+
+    return text.strip()
+
 
 class BotController:
     def __init__(self, token, github_token=None):
         self.token = token
         self.github_token = github_token
         self.application = ApplicationBuilder().token(self.token).build()
+        logging.info("BotController initialized with token and GitHub token.")
+
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Global error handler for logging exceptions.
+        """
+        logging.error("Exception in update:", exc_info=context.error)
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
-        Handler for /start command.
-        Now using HTML formatting.
+        /start command. For private chats or group usage.
         """
+        logging.info(f"/start command invoked by {update.effective_user.username if update.effective_user else 'Unknown'}")
         welcome_text = (
             "<b>Welcome to the GitHub Analyzer Bot!</b>\n\n"
             "Send me a GitHub username or profile link, and I will check how legit the account is.\n\n"
-            "This bot was created by @defamed_sol. If you like to show support for further development, "
-            f"please donate some SOLAMIs to <code>{SOLANA_WALLET_ADDRESS}</code>.\n\n"
+            "In a group chat, use /analyze @githubUser to analyze a GitHub profile.\n\n"
+            "This bot was created by @defamed_sol. If you like to show support, "
+            f"please donate SOL to <code>{SOLANA_WALLET_ADDRESS}</code>.\n\n"
             "Use /help to see more commands."
         )
-        await update.message.reply_text(welcome_text, parse_mode=ParseMode.HTML)
+        await update.effective_message.reply_text(welcome_text, parse_mode=ParseMode.HTML)
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        /help command.
+        """
+        logging.info(f"/help command invoked by {update.effective_user.username if update.effective_user else 'Unknown'}")
         help_text = (
-            "<b>How to use this bot</b>:\n"
-            "• Just type the GitHub username or paste a GitHub profile URL.<br>"
-            "  Example: <code>octocat</code> or <code>https://github.com/octocat</code><br>"
-            "• I will fetch data about the account, analyze repos & commit messages, and provide a score.\n\n"
-            "<b>Commands</b>:<br>"
-            "/start - Start interacting with the bot<br>"
-            "/help - Show this help message\n\n"
-            "💸 <b>Donations</b>:<br>"
-            f"To support this bot, donate SOL to: <code>{SOLANA_WALLET_ADDRESS}</code>"
+            "<b>How to use this bot</b>:\n\n"
+            "• In a group chat:\n"
+            "  <code>/analyze @githubUser</code>\n"
+            "• In a private chat:\n"
+            "  Send me a GitHub username or link directly.\n\n"
+            "I'll analyze the profile and provide details such as readme depth, commit patterns, "
+            "AI/Crypto usage, etc."
         )
-        await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
+        await update.effective_message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
-    async def analyze_github_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        message_text = update.message.text.strip()
+async def analyze_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    message = update.effective_message
 
-        # Extract username from a GitHub URL or treat as username
-        pattern = r'github\.com/([^/]+)$'
-        match = re.search(pattern, message_text)
-        if match:
-            username = match.group(1)
-        else:
-            username = message_text
+    if not chat or not message:
+        return
 
-        user_data = fetch_github_user(username, token=self.github_token)
-        if not user_data or user_data.get("message") == "Not Found":
-            await update.message.reply_text("❌ Sorry, I couldn't find that GitHub user.")
+    if chat.type == Chat.PRIVATE:
+        await message.reply_text("Please use this command in a group chat.")
+        return
+
+    text = message.text.strip()
+    # Instead of expecting @username, let's just capture everything after '/analyze '
+    pattern = r"^/analyze\s+(.+)$"
+    match = re.match(pattern, text)
+
+    if not match:
+        await message.reply_text(
+            "Usage:\n"
+            "/analyze <GitHub username or link>\n\n"
+            "e.g. /analyze octocat\n"
+            "     /analyze https://github.com/octocat"
+        )
+        return
+
+    user_input = match.group(1).strip()
+    # Now user_input might be "https://github.com/elizaOS" or "elizaOS"
+    github_user = extract_github_username(user_input)
+
+    analyzing_msg = await message.reply_text(
+        f"Analyzing GitHub user <b>{github_user}</b>... please wait!",
+        parse_mode=ParseMode.HTML
+    )
+
+    result = compute_profile_analysis(github_user, token=self.github_token)
+
+    if "error" in result:
+        await analyzing_msg.edit_text("User not found or an error occurred.")
+        return
+
+    await self._send_analysis_result(update, context, result, editing_msg=analyzing_msg)
+
+
+    async def analyze_private_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Handler for private messages with a GitHub username or link.
+        """
+        chat = update.effective_chat
+        message = update.effective_message
+
+        # Only respond if it's truly a private chat
+        if not chat or not message or chat.type != Chat.PRIVATE:
             return
 
-        repos_data = fetch_user_repos(username, token=self.github_token)
-        analysis_result = compute_github_score(user_data, repos_data, token=self.github_token)
+        message_text = message.text.strip()
+        logging.info(f"Private text received: {message_text}")
 
-        sub_scores = analysis_result["sub_scores"]
-        max_scores = analysis_result["max_scores"]
-        final_score = analysis_result["normalized_score"]
-        warnings = analysis_result["warnings"]
+        username = extract_github_username(message_text)
+        logging.info(f"Extracted username: {username}")
 
-        # Build sub-score breakdown (using HTML tags)
-        breakdown = (
-            f"🔹 <b>Account Age</b>: {sub_scores['account_age_score']:.2f}/{max_scores['account_age']}<br>"
-            f"🔹 <b>Profile Completeness</b>: {sub_scores['profile_completeness_score']:.2f}/{max_scores['profile_completeness']}<br>"
-            f"🔹 <b>Repo Activity</b>: {sub_scores['repo_activity_score']:.2f}/{max_scores['repo_activity']}<br>"
-            f"🔹 <b>Community Interaction</b>: {sub_scores['community_interaction_score']:.2f}/{max_scores['community_interaction']}<br>"
-            f"🔹 <b>External Consistency</b>: {sub_scores['external_consistency_score']:.2f}/{max_scores['external_consistency']}<br>"
-            f"🔹 <b>Readme/Commits</b>: {sub_scores['readme_commit_score']:.2f}/{max_scores['readme_commit']}<br>"
+        analyzing_msg = await message.reply_text(
+            f"Analyzing GitHub user <b>{username}</b>... please wait!",
+            parse_mode=ParseMode.HTML
         )
 
-        # Social links if any
-        social_links = []
-        if user_data.get("blog"):
-            social_links.append(f"🔗 Website/Blog: {user_data['blog']}")
-        if user_data.get("twitter_username"):
-            social_links.append(f"🐦 Twitter: @{user_data['twitter_username']}")
+        logging.info(f"Starting analysis for {username}...")
+        result = compute_profile_analysis(username, token=self.github_token)
+        logging.info(f"Analysis complete for {username}.")
 
-        social_section = "\n".join(social_links) if social_links else "No additional social links found."
+        if "error" in result:
+            await analyzing_msg.edit_text("User not found or an error occurred.")
+            return
+
+        await self._send_analysis_result(update, context, result, editing_msg=analyzing_msg)
+
+    async def _send_analysis_result(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        result: dict,
+        editing_msg=None
+    ):
+        """
+        Helper method to format and send the analysis result.
+        If editing_msg is provided, we'll edit that message with the final text.
+        Otherwise, we'll send a new message.
+        """
+        user_data = result["user_data"]
+        score = result["score"]
+        warnings = result["warnings"]
+        has_ai = result["has_ai"]
+        has_crypto = result["has_crypto"]
+        score_breakdown = result["score_breakdown"]
+
+        summary = (
+            f"<b>GitHub User</b>: {user_data['login']}\n"
+            f"<b>Profile</b>: {user_data['html_url']}\n"
+            f"<b>Public Repos</b>: {len(result['repo_data'])}\n\n"
+            f"<b>Score</b>: {score}/100\n"
+        )
+
+        # Detailed breakdown of scores
+        breakdown_text = (
+            "🔹 <b>Breakdown</b>:\n"
+            f"• Account Age Points: {score_breakdown['account_age_points']}\n"
+            f"• Readme Depth Points: {score_breakdown['readme_points']}\n"
+            f"• Commit Frequency Points: {score_breakdown['commit_points']}\n"
+            f"• PR/Issues Points: {score_breakdown['pr_issues_points']}\n"
+            f"• Profile Bio/Blog Points: {score_breakdown['profile_bio_blog_points']}\n"
+            f"• AI/Crypto Points: {score_breakdown['ai_crypto_points']}\n"
+        )
+        summary += breakdown_text + "\n"
+
+        # AI/Crypto mention
+        if has_ai or has_crypto:
+            ai_crypto_note = []
+            if has_ai:
+                ai_crypto_note.append("🧠 <b>Detected AI-related libraries.</b>")
+            if has_crypto:
+                ai_crypto_note.append("₿ <b>Detected Crypto/Blockchain references.</b>")
+            summary += "\n".join(ai_crypto_note) + "\n\n"
+        else:
+            summary += "❓ <b>No specific AI or crypto references detected.</b>\n\n"
 
         # Warnings
         if warnings:
-            warnings_text = "\n".join([f"⚠️ {w}" for w in warnings])
+            summary += "<b>Warnings</b>:\n"
+            for w in warnings:
+                summary += f"⚠️ {w}\n"
+            summary += "\n"
+
+        # ASCII bar chart
+        summary += f"<pre>{result['ascii_lang_chart']}</pre>\n"
+
+        # Social links
+        blog = result.get("blog", None)
+        twitter_user = result.get("twitter_user", None)
+        if blog or twitter_user:
+            summary += "<b>Social Links Found</b>:\n"
+            if blog:
+                summary += f"🔗 Website/Blog: {blog}\n"
+            if twitter_user:
+                summary += f"🐦 Twitter: @{twitter_user}\n"
+
+        final_text = summary
+
+        if editing_msg:
+            await editing_msg.edit_text(final_text, parse_mode=ParseMode.HTML)
         else:
-            warnings_text = "No obvious warnings. 🎉"
-
-        response = (
-            f"👤 <b>GitHub User</b>: {user_data['login']}\n"
-            f"🌐 <b>Profile</b>: {user_data['html_url']}\n"
-            f"📦 <b>Public Repos</b>: {len(repos_data)}\n\n"
-            f"{breakdown}\n"
-            f"✅ <b>Total Authenticity Score</b>: {final_score}/100\n\n"
-            f"<b>Social Links</b>:\n{social_section}\n\n"
-            f"<b>Analysis Warnings</b>:\n{warnings_text}\n\n"
-            f"💰 <i>If you find this bot helpful, consider donating SOL:</i>\n"
-            f"<code>{SOLANA_WALLET_ADDRESS}</code>"
-        )
-
-        await update.message.reply_text(response, parse_mode=ParseMode.HTML)
+            await update.effective_message.reply_text(final_text, parse_mode=ParseMode.HTML)
 
     def setup_handlers(self):
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.analyze_github_message))
+        self.application.add_handler(CommandHandler("analyze", self.analyze_group_command))
+        self.application.add_handler(
+            MessageHandler(
+                filters.TEXT & filters.ChatType.PRIVATE & ~filters.COMMAND,
+                self.analyze_private_text
+            )
+        )
+        self.application.add_error_handler(self.error_handler)
 
     def run_bot(self):
         self.setup_handlers()
+        logging.info("Starting the bot via polling...")
         self.application.run_polling()
+        logging.info("Bot has stopped polling. Exiting.")
         print("Bot is running... Press Ctrl+C to stop.")

@@ -1,7 +1,8 @@
 import requests
-import datetime
 import base64
-import random
+import datetime
+from collections import Counter
+import logging
 
 GITHUB_API_URL = "https://api.github.com"
 
@@ -10,222 +11,262 @@ def fetch_github_user(username, token=None):
     if token:
         headers["Authorization"] = f"token {token}"
     url = f"{GITHUB_API_URL}/users/{username}"
-    response = requests.get(url, headers=headers)
-    return response.json() if response.status_code == 200 else None
+    resp = requests.get(url, headers=headers)
+    return resp.json() if resp.status_code == 200 else None
 
-def fetch_user_repos(username, token=None):
+def fetch_repos(username, token=None):
     headers = {}
     if token:
         headers["Authorization"] = f"token {token}"
     url = f"{GITHUB_API_URL}/users/{username}/repos"
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json()
+    resp = requests.get(url, headers=headers)
+    if resp.status_code == 200:
+        return resp.json()
     return []
 
-def days_since_creation(created_at_str):
-    created_at = datetime.datetime.strptime(created_at_str, "%Y-%m-%dT%H:%M:%SZ")
-    delta = datetime.datetime.utcnow() - created_at
-    return delta.days
-
-def fetch_readme(owner, repo, token=None):
-    """
-    Tries to fetch README.md content from a repo.
-    Returns decoded string if found, else None.
-    """
+def fetch_readme(owner, repo_name, token=None):
     headers = {}
     if token:
         headers["Authorization"] = f"token {token}"
-
-    url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/README.md"
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        content_json = response.json()
-        if content_json.get("content"):
-            # README content is base64-encoded
-            readme_content = base64.b64decode(content_json["content"]).decode("utf-8", errors="replace")
-            return readme_content
+    url = f"{GITHUB_API_URL}/repos/{owner}/{repo_name}/contents/README.md"
+    resp = requests.get(url, headers=headers)
+    if resp.status_code == 200:
+        data = resp.json()
+        if "content" in data:
+            return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
     return None
 
-def fetch_commits(owner, repo, token=None):
-    """
-    Fetch commits from a repo (first page).
-    Returns a list of commit messages or empty if error/no commits.
-    """
+def fetch_commits(owner, repo_name, token=None):
+    headers = {}
+    if token:
+        headers["Authorization"] = f"token {token}"
+    url = f"{GITHUB_API_URL}/repos/{owner}/{repo_name}/commits"
+    resp = requests.get(url, headers=headers)
+    if resp.status_code == 200:
+        return resp.json()
+    return []
+
+def fetch_user_events(username, token=None):
+    headers = {}
+    if token:
+        headers["Authorization"] = f"token {token}"
+    url = f"{GITHUB_API_URL}/users/{username}/events/public"
+    resp = requests.get(url, headers=headers)
+    if resp.status_code == 200:
+        return resp.json()
+    return []
+
+def is_deep_readme(readme_text):
+    if not readme_text or len(readme_text) < 200:
+        return False
+    keywords = ["installation", "usage", "getting started", "example", "how to"]
+    text_lower = readme_text.lower()
+    return any(k in text_lower for k in keywords)
+
+def analyze_commit_frequency(commits):
+    from collections import Counter
+    day_counts = Counter()
+    for c in commits:
+        commit_date_str = c["commit"]["committer"]["date"]  # e.g. "2023-04-12T14:20:30Z"
+        commit_dt = datetime.datetime.fromisoformat(commit_date_str.replace("Z", "+00:00"))
+        day_str = commit_dt.strftime("%Y-%m-%d")
+        day_counts[day_str] += 1
+
+    if len(day_counts) == 1 and sum(day_counts.values()) > 10:
+        return day_counts, True
+    return day_counts, False
+
+def detect_languages(repos):
+    from collections import Counter
+    lang_counter = Counter()
+    has_ai = False
+    has_crypto = False
+
+    ai_keywords = {"tensorflow", "pytorch", "scikit-learn", "torch", "keras", "mxnet"}
+    crypto_keywords = {"solidity", "rust", "web3", "web3.js", "ethers.js", "nft", "smart contract"}
+
+    for r in repos:
+        lang = r.get("language", None)
+        if lang:
+            lang_counter[lang] += 1
+
+        desc = (r.get("description") or "").lower()
+        if any(kw in desc for kw in ai_keywords):
+            has_ai = True
+        if any(kw in desc for kw in crypto_keywords):
+            has_crypto = True
+
+    if "Solidity" in lang_counter:
+        has_crypto = True
+
+    return lang_counter, has_ai, has_crypto
+
+def check_requirements_files(repo, token=None):
+    found_deps = set()
+    possible_files = ["requirements.txt", "environment.yml", "Pipfile", "package.json"]
+
     headers = {}
     if token:
         headers["Authorization"] = f"token {token}"
 
-    # We'll fetch the first page with up to 30 commits
-    url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/commits"
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        commits = response.json()
-        messages = [c["commit"]["message"] for c in commits]
-        return messages
-    return []
+    for filename in possible_files:
+        url = f"{repo['url']}/contents/{filename}"
+        resp = requests.get(url, headers=headers)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "content" in data:
+                content = base64.b64decode(data["content"]).decode("utf-8", errors="replace").lower()
+                for ai_lib in ["tensorflow", "torch", "pytorch", "scikit-learn", "keras"]:
+                    if ai_lib in content:
+                        found_deps.add(ai_lib)
+                for crypto_lib in ["web3", "ethers"]:
+                    if crypto_lib in content:
+                        found_deps.add(crypto_lib)
 
-def analyze_readme_content(readme):
-    """
-    Basic analysis of README text.
-    Returns True if it looks 'meaningful', False if suspicious or empty.
-    This is just a demonstration. Real checks might be more elaborate.
-    """
-    if not readme:
-        return False
-    # For example, if it's very short or default text
-    if len(readme) < 100:
-        return False
-    return True
+    return found_deps
 
-def analyze_commit_messages(commit_messages):
-    """
-    Quick heuristic to see if commit messages are repeated or too generic.
-    Returns a suspicious flag (True/False) and some note.
-    """
-    if not commit_messages:
-        return True, "No commits found."
-    
-    # Sample a few random commits
-    sample_size = min(5, len(commit_messages))  # up to 5
-    sample_msgs = random.sample(commit_messages, sample_size)
+def ascii_bar_chart(counter, title="Language Usage"):
+    if not counter:
+        return f"{title}\nNo data."
 
-    suspicious_count = 0
-    for msg in sample_msgs:
-        msg_lower = msg.strip().lower()
-        if msg_lower in ["update readme", "fix #123", "test commit"]:
-            suspicious_count += 1
-        # add more patterns or heuristics here
+    total = sum(counter.values())
+    max_len = max(len(k) for k in counter.keys())
 
-    if suspicious_count >= (sample_size / 2):
-        return True, f"{suspicious_count} out of {sample_size} commits look auto-generated or generic."
-    return False, None
+    chart_lines = [f"{title}"]
+    for lang, count in counter.most_common():
+        bar_len = int((count / total) * 20)
+        bars = "█" * bar_len
+        chart_lines.append(f"{lang.rjust(max_len)}: {bars} ({count})")
+    return "\n".join(chart_lines)
 
-def analyze_repo_details(repo, token=None):
-    """
-    Fetches readme and commits, returns partial score plus warnings if suspicious.
-    """
+def analyze_pull_requests_and_issues(events):
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=30)
+    pr_count = 0
+    issues_count = 0
+
+    for ev in events:
+        created_at = datetime.datetime.fromisoformat(ev["created_at"].replace("Z", "+00:00"))
+        if created_at < cutoff:
+            continue
+        ev_type = ev["type"]
+        if ev_type == "PullRequestEvent":
+            pr_count += 1
+        elif ev_type == "IssuesEvent":
+            issues_count += 1
+
+    return pr_count, issues_count
+
+def compute_profile_analysis(username, token=None):
     warnings = []
+    user_data = fetch_github_user(username, token=token)
+    if not user_data or user_data.get("message") == "Not Found":
+        return {"error": "User not found"}
 
-    owner = repo["owner"]["login"]
-    repo_name = repo["name"]
+    repos = fetch_repos(username, token=token)
 
-    readme_content = fetch_readme(owner, repo_name, token=token)
-    readme_ok = analyze_readme_content(readme_content)
-    if not readme_ok:
-        warnings.append("README seems too short or missing.")
+    readme_score = 0
+    commit_score = 0
+    readme_checks = []
+    commit_patterns = []
 
-    commit_msgs = fetch_commits(owner, repo_name, token=token)
-    suspicious_commits, note = analyze_commit_messages(commit_msgs)
-    if suspicious_commits:
-        warnings.append(f"Commit messages suspicious: {note}" if note else "Commit messages suspicious.")
-
-    # Check library usage (e.g., check if there's a main language)
-    language = repo.get("language", None)
-    library_note = None
-    if not language or language in ["HTML", "CSS", "Unknown"]:
-        # Just a naive check
-        library_note = "No major coding language detected."
-    # You could also fetch `package.json` or `requirements.txt` if needed
-
-    if library_note:
-        warnings.append(library_note)
-
-    return warnings
-
-def compute_github_score(user_data, repos_data, token=None):
-    """
-    Compute a 'score' + warnings based on various heuristics,
-    returning a dict with sub-scores, final score, and a list of warnings.
-    """
-
-    sub_scores = {
-        "account_age_score": 0,
-        "profile_completeness_score": 0,
-        "repo_activity_score": 0,
-        "community_interaction_score": 0,
-        "external_consistency_score": 0,
-        "readme_commit_score": 0,  # new category for readme/commit checks
+    # We'll track how many points come from each category
+    score_breakdown = {
+        "account_age_points": 0,
+        "readme_points": 0,
+        "commit_points": 0,
+        "pr_issues_points": 0,
+        "profile_bio_blog_points": 0,
+        "ai_crypto_points": 0,
     }
 
-    max_scores = {
-        "account_age": 15,
-        "profile_completeness": 20,
-        "repo_activity": 25,
-        "community_interaction": 25,
-        "external_consistency": 15,
-        "readme_commit": 20,  # let's allocate 20 points for these new checks
-    }
-
-    overall_warnings = []
-
-    # --- 1) Account Age ---
-    age_in_days = days_since_creation(user_data["created_at"])
-    if age_in_days > 365:
-        sub_scores["account_age_score"] = max_scores["account_age"]
-    else:
-        sub_scores["account_age_score"] = (age_in_days / 365) * max_scores["account_age"]
-
-    # --- 2) Profile Completeness ---
-    completeness_points = 0
-    if user_data.get("avatar_url"):
-        completeness_points += 5
-    if user_data.get("bio"):
-        completeness_points += 5
-    if user_data.get("blog"):
-        completeness_points += 5
-    # Add more checks as needed (e.g., email, location)
-    completeness_points = min(completeness_points, max_scores["profile_completeness"])
-    sub_scores["profile_completeness_score"] = completeness_points
-
-    # --- 3) Repository Activity ---
-    repo_count = len(repos_data)
-    if repo_count >= 20:
-        sub_scores["repo_activity_score"] = max_scores["repo_activity"]
-    else:
-        sub_scores["repo_activity_score"] = (repo_count / 20) * max_scores["repo_activity"]
-
-    # --- 4) Community Interaction ---
-    interaction_points = 0
-    for repo in repos_data:
-        if repo.get("forks_count", 0) > 0:
-            interaction_points += 1
-        if repo.get("stargazers_count", 0) > 0:
-            interaction_points += 1
-    interaction_points = min(interaction_points, max_scores["community_interaction"])
-    sub_scores["community_interaction_score"] = interaction_points
-
-    # --- 5) External Consistency ---
-    external_points = 0
-    if user_data.get("blog") or user_data.get("twitter_username"):
-        external_points += 10
-    sub_scores["external_consistency_score"] = min(external_points, max_scores["external_consistency"])
-
-    # --- 6) Readme/Commit Analysis (new) ---
-    # We'll do a quick pass over the user's repos, awarding points if readmes look good & commits are not suspicious.
-    # This is simplified: you might want a more thorough approach.
-    readme_commit_score = 0
-    for repo in repos_data[:5]:  # Limit to first 5 to avoid time-consuming checks
-        warnings = analyze_repo_details(repo, token=token)
-        if not warnings:
-            # If no warnings, award some points
-            readme_commit_score += 4
+    for r in repos[:5]:
+        readme = fetch_readme(r["owner"]["login"], r["name"], token=token)
+        if is_deep_readme(readme):
+            readme_score += 2
         else:
-            overall_warnings.extend([f"{repo['name']}: {w}" for w in warnings])
+            warnings.append(f"Repo {r['name']}: shallow or missing README.")
 
-    # Cap the readme_commit_score
-    readme_commit_score = min(readme_commit_score, max_scores["readme_commit"])
-    sub_scores["readme_commit_score"] = readme_commit_score
+        commits = fetch_commits(r["owner"]["login"], r["name"], token=token)
+        day_counts, suspicious = analyze_commit_frequency(commits)
+        if suspicious:
+            warnings.append(f"Repo {r['name']}: suspicious commit pattern (all commits in 1 day).")
+        commit_score += min(len(day_counts), 5)
 
-    # --- Summation & Final Score ---
-    total_earned_points = sum(sub_scores.values())
-    total_max_points = sum(max_scores.values())
+        found_deps = check_requirements_files(r, token=token)
+        if found_deps:
+            readme_checks.append(f"{r['name']} dependencies: {', '.join(sorted(found_deps))}")
 
-    normalized_score = (total_earned_points / total_max_points) * 100
+    events = fetch_user_events(username, token=token)
+    pr_count, issues_count = analyze_pull_requests_and_issues(events)
+
+    lang_counter, has_ai, has_crypto = detect_languages(repos)
+    ascii_lang_chart = ascii_bar_chart(lang_counter, title="Language Usage")
+
+    base_score = 0
+    account_age_points = 0
+    pr_issues_points = 0
+
+    # profile age
+    account_created_str = user_data.get("created_at")
+    if account_created_str:
+        created_dt = datetime.datetime.fromisoformat(account_created_str.replace("Z", "+00:00"))
+        account_age_days = (datetime.datetime.now(datetime.timezone.utc) - created_dt).days
+        if account_age_days > 365:
+            account_age_points = 10
+        else:
+            account_age_points = (account_age_days / 365) * 10
+
+    base_score += account_age_points
+    score_breakdown["account_age_points"] = round(account_age_points, 2)
+
+    # readme + commit
+    base_score += readme_score
+    base_score += commit_score
+    score_breakdown["readme_points"] = readme_score
+    score_breakdown["commit_points"] = commit_score
+
+    # pr/issues
+    pr_issues_points = (pr_count * 2) + issues_count
+    base_score += pr_issues_points
+    score_breakdown["pr_issues_points"] = pr_issues_points
+
+    # profile bio/blog
+    profile_bio_blog_points = 0
+    if user_data.get("bio") or user_data.get("blog"):
+        profile_bio_blog_points = 5
+    base_score += profile_bio_blog_points
+    score_breakdown["profile_bio_blog_points"] = profile_bio_blog_points
+
+    # AI/Crypto
+    ai_crypto_points = 0
+    if has_ai:
+        ai_crypto_points += 3
+    if has_crypto:
+        ai_crypto_points += 3
+    base_score += ai_crypto_points
+    score_breakdown["ai_crypto_points"] = ai_crypto_points
+
+    # normalize
+    final_score = min(base_score, 30) / 30 * 100
+
+    # check user social links
+    twitter_user = user_data.get("twitter_username", None)
+    blog = user_data.get("blog", None)
 
     return {
-        "sub_scores": sub_scores,
-        "max_scores": max_scores,
-        "normalized_score": round(normalized_score, 2),
-        "warnings": overall_warnings
+        "user_data": user_data,
+        "repo_data": repos,
+        "readme_checks": readme_checks,
+        "commit_patterns": commit_patterns,
+        "pull_requests_30d": pr_count,
+        "issues_30d": issues_count,
+        "lang_counter": lang_counter,
+        "has_ai": has_ai,
+        "has_crypto": has_crypto,
+        "score": round(final_score, 2),
+        "warnings": warnings,
+        "ascii_lang_chart": ascii_lang_chart,
+        "score_breakdown": score_breakdown,
+        "twitter_user": twitter_user,
+        "blog": blog,
     }
