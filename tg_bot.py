@@ -59,7 +59,7 @@ class BotController:
         welcome_text = (
             "<b>Welcome to the GitHub Analyzer Bot!</b>\n\n"
             "Send me a GitHub username or profile link, and I will check how legit the account is.\n\n"
-            "In a group chat, use /analyze <GitHub username or link>.\n\n"
+            "In a group chat, use /analyze &lt;GitHub username or link&gt;.\n\n"
             "This bot was created by @defamed_sol. If you like to show support, "
             f"please donate SOL to <code>{SOLANA_WALLET_ADDRESS}</code>.\n\n"
             "Use /help to see more commands."
