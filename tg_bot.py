@@ -1,5 +1,3 @@
-# tg_bot.py
-
 import logging
 import re
 from urllib.parse import urlparse
@@ -15,7 +13,7 @@ from telegram.ext import (
 from analyzer import compute_profile_analysis
 
 logging.basicConfig(
-    filename="logs/bot.log",
+    
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
