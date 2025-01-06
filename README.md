@@ -1,13 +1,17 @@
+<!-- 
+   GitHub Analyzer Bot
+   A Telegram bot that analyzes GitHub profiles for authenticity, activity, AI/crypto usage, etc.
+-->
 
-<h1 align="center">GitHub Analyzer Bot</h1>
+<h1 align="center">🚀 GitHub Analyzer Bot</h1>
 
 <p align="center">
   <img src="GitHub-Analyzer.png" alt="GitHub Analyzer Logo" width="150" style="border-radius:50%">
 </p>
 
 <p align="center">
-  <strong>Analyze GitHub profiles right from your Telegram chat! </strong><br/>
-  <em>Checks profile authenticity, commit patterns, readme quality, AI/crypto usage, and more.</em>
+  <strong>Analyze GitHub profiles directly from your Telegram chat!</strong><br/>
+  <em>Assess authenticity, commit patterns, AI/Crypto usage, and more.</em>
 </p>
 
 <hr/>
@@ -15,11 +19,14 @@
 <h2>✨ Features</h2>
 
 <ul>
-  <li>Detects AI &amp; Crypto references in languages or dependencies <span style="color: #ff9900;">🧠</span> ₿</li>
-  <li>Scores repos based on readme depth, commit frequency, PR/Issue activity, etc.</li>
-  <li>Generates an overall authenticity score <strong>(0–100)</strong> <span style="color: #00cc00;">✅</span></li>
-  <li>Displays an ASCII bar chart of the user's language usage.</li>
-  <li>Supports both <strong>private messages</strong> and <strong>group chat commands</strong> with <code>/analyze</code>.</li>
+  <li>🔍 Detects AI &amp; Crypto references in languages or dependencies</li>
+  <li>📊 Scores repositories based on readme depth, commit frequency, PR/Issue activity, stars, forks, and recent commits</li>
+  <li>💯 Generates an overall authenticity score <strong>(0–100)</strong> with a detailed breakdown</li>
+  <li>📈 Displays an ASCII bar chart of the user's language usage</li>
+  <li>🤖 Supports both <strong>private messages</strong> and <strong>group chat commands</strong> with <code>/analyze</code></li>
+  <li>⚠️ Provides warnings for suspicious patterns or low activity</li>
+  <li>👁️ Each time a profile is scanned, the bot keeps track of the number of scans.</li>
+
 </ul>
 
 <h2>🚀 Getting Started</h2>
@@ -46,7 +53,7 @@ GITHUB_TOKEN=ghp_YourGitHubPersonalAccessToken
 <h2>🤖 Usage</h2>
 
 <ul>
-  <li><strong>Private Chat</strong>: send a GitHub username or link (<code>https://github.com/username</code>). The bot replies with a score and detailed breakdown.</li>
+  <li><strong>Private Chat</strong>: Send a GitHub username or link (<code>https://github.com/username</code>). The bot replies with a score and detailed breakdown.</li>
   <li><strong>Group Chat</strong>:
     <ul>
       <li>Use <code>/analyze &lt;GitHub user or link&gt;</code>. For example:
@@ -61,32 +68,15 @@ GITHUB_TOKEN=ghp_YourGitHubPersonalAccessToken
 
 <h2>📜 Commands</h2>
 
-<table>
-  <thead>
-    <tr>
-      <th>Command</th>
-      <th>Description</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><code>/start</code></td>
-      <td>Initial greeting and overview</td>
-    </tr>
-    <tr>
-      <td><code>/help</code></td>
-      <td>How to use the bot, examples, etc.</td>
-    </tr>
-    <tr>
-      <td><code>/analyze &lt;GitHub user/link&gt;</code></td>
-      <td>Analyzes the specified GitHub profile and returns a score</td>
-    </tr>
-  </tbody>
-</table>
+| Command                     | Description                                 |
+|-----------------------------|---------------------------------------------|
+| <code>/start</code>         | Initial greeting and overview               |
+| <code>/help</code>          | How to use the bot, examples, etc.          |
+| <code>/analyze &lt;...&gt;</code> | Analyzes the specified GitHub profile and returns a score |
 
 <h2>📝 Logs</h2>
 <p>
-  The bot logs important actions and errors to <strong><code>logs/bot.log</code></strong>. Check it if something goes wrong.
+  The bot logs important actions and errors to STDOUT, which can be viewed in your hosting platform's logs dashboard.
 </p>
 
 <h2>💡 Contributing</h2>
@@ -94,7 +84,7 @@ GITHUB_TOKEN=ghp_YourGitHubPersonalAccessToken
   Pull requests are welcome! For major changes, please open an issue first to discuss what you would like to change.
 </p>
 
-<h2>⚖ License</h2>
+<h2>⚖️ License</h2>
 <p>
   This project is open-sourced under the <strong>MIT License</strong> – see the <em>LICENSE</em> file for details.
 </p>
