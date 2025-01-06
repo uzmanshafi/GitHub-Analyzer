@@ -1,3 +1,5 @@
+# tg_bot.py
+
 import logging
 import re
 from urllib.parse import urlparse
@@ -12,8 +14,8 @@ from telegram.ext import (
 )
 from analyzer import compute_profile_analysis
 
+# Configure logging to STDOUT for platforms like Render
 logging.basicConfig(
-    
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
@@ -131,7 +133,7 @@ class BotController:
         logging.info(f"Analysis complete for {github_user}.")
 
         if "error" in result:
-            await analyzing_msg.edit_text("User not found or an error occurred.")
+            await analyzing_msg.edit_text("❌ User not found or an error occurred.")
             return
 
         await self._send_analysis_result(update, context, result, editing_msg=analyzing_msg)
@@ -163,7 +165,7 @@ class BotController:
         logging.info(f"Analysis complete for {username}.")
 
         if "error" in result:
-            await analyzing_msg.edit_text("User not found or an error occurred.")
+            await analyzing_msg.edit_text("❌ User not found or an error occurred.")
             return
 
         await self._send_analysis_result(update, context, result, editing_msg=analyzing_msg)
@@ -236,6 +238,13 @@ class BotController:
                 summary += f"🔗 Website/Blog: {blog}\n"
             if twitter_user:
                 summary += f"🐦 Twitter: @{twitter_user}\n"
+
+        # Disclaimer
+        disclaimer = (
+            "\n⚠️ <i>Please note:</i> The bot isn’t always 100% accurate and I can’t be held responsible "
+            "for any decisions made based on its analysis. Always do your own research before making any investments."
+        )
+        summary += disclaimer
 
         final_text = summary
 
