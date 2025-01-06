@@ -1,7 +1,9 @@
-# tg_bot.py
-
 import logging
 import re
+import json
+import os
+import threading
+
 from urllib.parse import urlparse
 from telegram import Update, Chat
 from telegram.constants import ParseMode
@@ -22,6 +24,9 @@ logging.basicConfig(
 
 SOLANA_WALLET_ADDRESS = "7RGjKAS8Lij9oAihuWcuprYQ7Qu1p674Qf7z8HfLvnXa"
 
+COUNT_FILE = "count.json"
+COUNT_LOCK = threading.Lock()
+
 def extract_github_username(text: str) -> str:
     """
     Parses a possible GitHub link and extracts the first path segment after github.com/,
@@ -40,11 +45,30 @@ def extract_github_username(text: str) -> str:
 
     return text.strip()
 
+def load_counts():
+    if os.path.exists(COUNT_FILE):
+        try:
+            with COUNT_LOCK, open(COUNT_FILE, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            logging.error("Failed to decode JSON from counts.json. Starting with empty counts.")
+            return {}
+    return {}
+
+def save_counts(counts):
+    try:
+        with COUNT_LOCK, open(COUNT_FILE, 'w') as f:
+            json.dump(counts, f)
+    except Exception as e:
+        logging.error(f"Failed to save counts to {COUNT_FILE}: {e}")
+        
+        
 class BotController:
     def __init__(self, token, github_token=None):
         self.token = token
         self.github_token = github_token
         self.application = ApplicationBuilder().token(self.token).build()
+        self.scan_counts = load_counts()
         logging.info("BotController initialized with token and GitHub token.")
 
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -188,6 +212,17 @@ class BotController:
         has_ai = result["has_ai"]
         has_crypto = result["has_crypto"]
         score_breakdown = result["score_breakdown"]
+        
+        github_url = user_data['html_url']
+        
+        if github_url in self.scan_counts:
+            self.scan_counts[github_url] += 1
+        else:
+            self.scan_counts[github_url] = 1
+            
+        save_counts(self.scan_counts)
+        
+        scan_count = self.scan_counts[github_url]
 
         summary = (
             f"<b>GitHub User</b>: {user_data['login']}\n"
@@ -238,7 +273,10 @@ class BotController:
                 summary += f"🔗 Website/Blog: {blog}\n"
             if twitter_user:
                 summary += f"🐦 Twitter: @{twitter_user}\n"
-
+                
+        # Scan Count
+        summary += f"\n👁️ **Scanned {scan_count} times**"
+        
         # Disclaimer
         disclaimer = (
             "\n⚠️ <i>Please note:</i> The bot isn’t always 100% accurate and I can’t be held responsible "
